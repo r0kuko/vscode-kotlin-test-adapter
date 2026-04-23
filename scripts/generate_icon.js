@@ -25,7 +25,7 @@ const SIZE = 256;
 /** Kotlin logo size relative to the canvas. */
 const OVERLAY_RATIO = 0.50;
 /** Padding from the bottom-right edge, relative to canvas. */
-const PADDING_RATIO = 0.04;
+const PADDING_RATIO = 0;
 
 async function main() {
     let sharp;
