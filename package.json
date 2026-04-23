@@ -1,0 +1,86 @@
+{
+  "name": "vscode-kotlin-test-adapter",
+  "displayName": "Kotlin Test Explorer",
+  "description": "Run and debug Kotlin (JUnit 5) tests in VS Code via Gradle. Compatible with the Test Explorer UI.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "keywords": [
+    "kotlin",
+    "test",
+    "junit",
+    "gradle",
+    "test explorer"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/build.gradle.kts",
+    "workspaceContains:**/build.gradle",
+    "workspaceContains:**/settings.gradle.kts",
+    "workspaceContains:**/settings.gradle"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Kotlin Test Adapter",
+      "properties": {
+        "kotlinTestAdapter.gradleCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Gradle command. Defaults to ./gradlew (or gradlew.bat on Windows) if a wrapper is found, otherwise 'gradle'."
+        },
+        "kotlinTestAdapter.gradleExtraArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra arguments passed to every Gradle test invocation."
+        },
+        "kotlinTestAdapter.testSourceGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "**/src/test/kotlin/**/*.kt",
+            "**/src/test/java/**/*.kt",
+            "**/src/integrationTest/kotlin/**/*.kt"
+          ],
+          "description": "Globs (relative to each Gradle module) used to discover Kotlin test files."
+        },
+        "kotlinTestAdapter.excludeGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "**/build/**",
+            "**/.gradle/**",
+            "**/node_modules/**"
+          ],
+          "description": "Globs excluded from test discovery."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "kotlinTestAdapter.refresh",
+        "title": "Kotlin Tests: Refresh",
+        "category": "Kotlin Test Adapter"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0"
+  },
+  "extensionDependencies": [],
+  "extensionPack": []
+}
