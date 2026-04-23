@@ -25,6 +25,7 @@
     "workspaceContains:**/settings.gradle"
   ],
   "main": "./out/extension.js",
+  "icon": "images/icon.png",
   "contributes": {
     "configuration": {
       "title": "Kotlin Test Adapter",
@@ -36,13 +37,17 @@
         },
         "kotlinTestAdapter.gradleExtraArgs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Extra arguments passed to every Gradle test invocation."
         },
         "kotlinTestAdapter.testSourceGlobs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [
             "**/src/test/kotlin/**/*.kt",
             "**/src/test/java/**/*.kt",
@@ -52,7 +57,9 @@
         },
         "kotlinTestAdapter.excludeGlobs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [
             "**/build/**",
             "**/.gradle/**",
@@ -74,11 +81,13 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "icon": "node scripts/generate_icon.js"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.80.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.4.0"
   },
   "extensionDependencies": [],

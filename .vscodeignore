@@ -2,6 +2,7 @@
 .vscode-test/**
 src/**
 sample/**
+scripts/**
 **/*.map
 **/*.ts
 tsconfig.json
