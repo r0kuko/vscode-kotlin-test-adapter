@@ -1,5 +1,18 @@
 # Kotlin Test Adapter for VS Code
 
+<p align="center">
+  <img src="images/icon.png" alt="Kotlin Test Adapter" width="128" />
+</p>
+
+<p align="center">
+  <img alt="VS Code" src="https://img.shields.io/badge/VS%20Code-%5E1.80-007ACC?logo=visualstudiocode&logoColor=white" />
+  <img alt="Kotlin" src="https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white" />
+  <img alt="JUnit 5" src="https://img.shields.io/badge/JUnit-5-25A162?logo=junit5&logoColor=white" />
+  <img alt="Gradle" src="https://img.shields.io/badge/Gradle-multi--module-02303A?logo=gradle&logoColor=white" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue" />
+  <img alt="CI" src="https://github.com/rokuko/vscode-kotlin-test-adapter/actions/workflows/ci.yml/badge.svg" />
+</p>
+
 A Visual Studio Code extension that discovers, runs and reports **Kotlin** unit
 tests authored with **JUnit 5** in **Gradle** projects (single- or multi-module).
 
@@ -79,9 +92,9 @@ already opened on the `sample/` folder.
 
 ## Building the extension
 
-```powershell
-npm install
-npm run compile
+```bash
+bun install
+bun run compile
 ```
 
 Then either press `F5` or package with `vsce package`.
