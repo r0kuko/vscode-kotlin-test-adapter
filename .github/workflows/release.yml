@@ -21,19 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 20
-          cache: npm
+          bun-version: latest
 
       - name: Install dependencies
-        run: npm ci --no-audit --no-fund --loglevel=error
+        run: bun install --frozen-lockfile
 
       - name: Type-check
-        run: npm run lint
+        run: bun run lint
 
       - name: Compile
-        run: npm run compile
+        run: bun run compile
 
       - name: Verify tag matches package.json version
         if: github.event_name == 'push'
@@ -46,7 +45,7 @@ jobs:
           fi
 
       - name: Package VSIX
-        run: npx --yes @vscode/vsce@latest package
+        run: bunx --bun @vscode/vsce@latest package
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
@@ -66,10 +65,10 @@ jobs:
         if: ${{ secrets.VSCE_PAT != '' }}
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx --yes @vscode/vsce@latest publish --pat "$VSCE_PAT"
+        run: bunx --bun @vscode/vsce@latest publish --pat "$VSCE_PAT"
 
       - name: Publish to Open VSX (optional)
         if: ${{ secrets.OVSX_PAT != '' }}
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: npx --yes ovsx@latest publish *.vsix --pat "$OVSX_PAT"
+        run: bunx --bun ovsx@latest publish *.vsix --pat "$OVSX_PAT"
