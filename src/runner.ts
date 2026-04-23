@@ -11,6 +11,8 @@ export interface RunRequest {
     tasks: string[];
     /** Optional `--tests` filters (fully-qualified, may include method names). */
     filters: string[];
+    /** When true, pass `--debug-jvm` so Gradle suspends waiting for a JDWP debugger. */
+    debug?: boolean;
 }
 
 export interface RunResult {
@@ -48,6 +50,11 @@ export async function runTests(
     }
     for (const f of req.filters) {
         args.push('--tests', f);
+    }
+    if (req.debug) {
+        // Suspend the JVM immediately on start and wait for a JDWP debugger to
+        // attach on port 5005 (Gradle's default debug port).
+        args.push('--debug-jvm');
     }
     args.push('--rerun-tasks');
     args.push('--continue');

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import {
     GradleModule,
     discoverGradleModules,
@@ -308,17 +309,64 @@ async function runHandler(
 
             if (debug) {
                 run.appendOutput(
-                    `\r\n[Debug] Debugging Kotlin tests is not yet supported – running instead.\r\n`
+                    `\r\n[Debug] Starting Gradle with --debug-jvm. Waiting for debugger to attach...\r\n`
                 );
             }
 
+            // When debugging, intercept output to detect the JDWP listening port
+            // and automatically attach VS Code's Java debugger.
+            let debugAttached = false;
             const onOutput = (chunk: string) => {
                 run.appendOutput(chunk.replace(/\r?\n/g, '\r\n'));
+                if (debug && !debugAttached) {
+                    // JDK 8:  "address: 5005"
+                    // JDK 9+: "address: *:5005" or "address: localhost:5005"
+                    const m = chunk.match(/Listening for transport dt_socket at address:\s*(?:[^:\s]+:)?(\d+)/i);
+                    if (m) {
+                        debugAttached = true;
+                        const port = parseInt(m[1], 10);
+                        const allModules = Array.from(byModule.values()).map(g => g.module);
+                        // Only pass directories that actually exist on disk.
+                        // Non-existent paths cause the Java debugger to abandon source
+                        // lookup and fall back to showing decompiled .class bytecode.
+                        const sourcePaths = collectSourcePaths(allModules);
+                        output.appendLine(`[Debug] port=${port} sourcePaths=${JSON.stringify(sourcePaths)}`);
+                        run.appendOutput(`\r\n[Debug] Attaching to port ${port}\r\n`);
+
+                        // Pick the best available debug adapter:\n                        //  type:'java' works with vscjava.vscode-java-debug (the standalone\n                        //  debugger, no need for the full Extension Pack for Java).
+                        const hasJavaDebugger =
+                            !!vscode.extensions.getExtension('vscjava.vscode-java-debug') ||
+                            !!vscode.extensions.getExtension('redhat.java');
+
+                        if (!hasJavaDebugger) {
+                            const msg = 'No JVM debug adapter found. Install ' +
+                                '"Debugger for Java" (vscjava.vscode-java-debug) to enable debugging.';
+                            output.appendLine(`[Debug] ${msg}`);
+                            run.appendOutput(`\r\n[Debug] ${msg}\r\n`);
+                            return;
+                        }
+
+                        const debugConfig: vscode.DebugConfiguration = {
+                            type: 'java',
+                            request: 'attach',
+                            name: 'Kotlin Test Debugger',
+                            hostName: 'localhost',
+                            port,
+                            sourcePaths,
+                        };
+
+                        vscode.debug.startDebugging(module.workspaceFolder, debugConfig)
+                            .then(undefined, err => {
+                                output.appendLine(`Failed to attach debugger: ${err}`);
+                                run.appendOutput(`\r\n[Debug] Failed to attach debugger: ${err}\r\n`);
+                            });
+                    }
+                }
             };
 
             run.appendOutput(`\r\n=== ${module.projectPath} ===\r\n`);
             const result = await runTests(
-                { module, tasks, filters },
+                { module, tasks, filters, debug },
                 token,
                 onOutput
             );
@@ -382,6 +430,59 @@ function collectLeaves(request: vscode.TestRunRequest): vscode.TestItem[] {
 interface ModuleGroup {
     module: GradleModule;
     items: vscode.TestItem[];
+}
+
+/**
+ * Return the list of source root directories for the given modules.
+ * These are passed as `sourcePaths` to the Java debugger so it can map
+ * compiled class files back to `.kt` / `.java` source files instead of
+ * showing decompiled bytecode.
+ */
+function collectSourcePaths(modules: GradleModule[]): string[] {
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    const add = (p: string) => {
+        if (!seen.has(p) && fs.existsSync(p)) {
+            seen.add(p);
+            paths.push(p);
+        }
+    };
+    for (const mod of modules) {
+        // Standard Gradle source-set directories for Kotlin and Java.
+        // Only include directories that actually exist — passing non-existent
+        // paths causes the Java debugger to abandon source lookup entirely and
+        // fall back to showing decompiled class-file bytecode.
+        for (const sourceSet of ['main', 'test']) {
+            add(path.join(mod.rootPath, 'src', sourceSet, 'kotlin'));
+            add(path.join(mod.rootPath, 'src', sourceSet, 'java'));
+        }
+    }
+    return paths;
+}
+
+/**
+ * Return compiled class output directories for the given modules.
+ * Providing these alongside `sourcePaths` lets the Java debugger correlate
+ * `.class` files (and their `SourceFile` debug attributes) with `.kt` sources.
+ */
+function collectClassPaths(modules: GradleModule[]): string[] {
+    const paths: string[] = [];
+    const seen = new Set<string>();
+    const add = (p: string) => {
+        if (!seen.has(p) && fs.existsSync(p)) {
+            seen.add(p);
+            paths.push(p);
+        }
+    };
+    for (const mod of modules) {
+        for (const sourceSet of ['main', 'test']) {
+            // Kotlin compiler output
+            add(path.join(mod.rootPath, 'build', 'classes', 'kotlin', sourceSet));
+            // Java compiler output (mixed Kotlin/Java projects)
+            add(path.join(mod.rootPath, 'build', 'classes', 'java', sourceSet));
+        }
+    }
+    return paths;
 }
 
 function groupByModule(items: vscode.TestItem[]): Map<string, ModuleGroup> {
