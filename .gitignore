@@ -1,0 +1,8 @@
+node_modules/
+out/
+*.vsix
+.vscode-test/
+sample/**/build/
+sample/**/.gradle/
+.gradle/
+build/
