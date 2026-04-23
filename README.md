@@ -10,7 +10,7 @@
   <img alt="JUnit 5" src="https://img.shields.io/badge/JUnit-5-25A162?logo=junit5&logoColor=white" />
   <img alt="Gradle" src="https://img.shields.io/badge/Gradle-multi--module-02303A?logo=gradle&logoColor=white" />
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue" />
-  <img alt="CI" src="https://github.com/rokuko/vscode-kotlin-test-adapter/actions/workflows/ci.yml/badge.svg" />
+  <img alt="CI" src="https://github.com/r0kuko/vscode-kotlin-test-adapter/actions/workflows/ci.yml/badge.svg" />
 </p>
 
 A Visual Studio Code extension that discovers, runs and reports **Kotlin** unit
