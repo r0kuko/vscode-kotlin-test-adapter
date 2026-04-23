@@ -3,7 +3,7 @@
   "displayName": "Kotlin Test Explorer",
   "description": "Run and debug Kotlin (JUnit 5) tests in VS Code via Gradle. Compatible with the Test Explorer UI.",
   "version": "0.1.4",
-  "publisher": "local",
+  "publisher": "r0kuko",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
