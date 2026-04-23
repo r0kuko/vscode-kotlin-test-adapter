@@ -19,7 +19,7 @@ let output: vscode.OutputChannel;
  * Per-test-item metadata, keyed by TestItem.id.
  * We avoid putting non-serialisable data on the TestItem itself.
  */
-interface ItemMeta {
+export interface ItemMeta {
     kind: 'workspace' | 'module' | 'class' | 'method';
     module?: GradleModule;
     /** For classes/methods: the fully-qualified class name. */
@@ -86,44 +86,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-    /* nothing to do – disposables are managed by VS Code */
+    if (pending) {
+        clearTimeout(pending);
+        pending = undefined;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Discovery / tree management
 // ---------------------------------------------------------------------------
 
+let refreshing = false;
+
 async function refreshAll(): Promise<void> {
-    const folders = vscode.workspace.workspaceFolders ?? [];
-    // Replace top-level items.
-    controller.items.replace([]);
-    meta.clear();
+    if (refreshing) {
+        return;
+    }
+    refreshing = true;
+    try {
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        // Replace top-level items.
+        controller.items.replace([]);
+        meta.clear();
 
-    for (const folder of folders) {
-        const modules = await discoverGradleModules(folder);
-        if (modules.length === 0) {
-            continue;
-        }
-        const folderItem = controller.createTestItem(
-            `ws:${folder.uri.toString()}`,
-            folder.name,
-            folder.uri
-        );
-        meta.set(folderItem.id, { kind: 'workspace' });
-        controller.items.add(folderItem);
-
-        for (const module of modules) {
-            const moduleItem = controller.createTestItem(
-                `mod:${folder.uri.toString()}::${module.projectPath}`,
-                module.projectPath === ':' ? '(root)' : module.projectPath,
-                vscode.Uri.file(module.rootPath)
+        for (const folder of folders) {
+            const modules = await discoverGradleModules(folder);
+            if (modules.length === 0) {
+                continue;
+            }
+            const folderItem = controller.createTestItem(
+                `ws:${folder.uri.toString()}`,
+                folder.name,
+                folder.uri
             );
-            moduleItem.description = path.relative(folder.uri.fsPath, module.rootPath) || '.';
-            meta.set(moduleItem.id, { kind: 'module', module });
-            folderItem.children.add(moduleItem);
+            meta.set(folderItem.id, { kind: 'workspace' });
+            controller.items.add(folderItem);
 
-            await discoverModuleTests(moduleItem, module);
+            for (const module of modules) {
+                const moduleItem = controller.createTestItem(
+                    `mod:${folder.uri.toString()}::${module.projectPath}`,
+                    module.projectPath === ':' ? '(root)' : module.projectPath,
+                    vscode.Uri.file(module.rootPath)
+                );
+                moduleItem.description = path.relative(folder.uri.fsPath, module.rootPath) || '.';
+                meta.set(moduleItem.id, { kind: 'module', module });
+                folderItem.children.add(moduleItem);
+
+                await discoverModuleTests(moduleItem, module);
+            }
         }
+    } finally {
+        refreshing = false;
     }
 }
 
@@ -154,6 +167,10 @@ function populateModuleItem(
         byClass.set(t.className, list);
     }
 
+    // Keep a fqClass → TestItem map so nested classes can be attached as children
+    // of their parent class item rather than siblings under the module.
+    const classItems = new Map<string, vscode.TestItem>();
+
     const sortedClasses = Array.from(byClass.keys()).sort();
     for (const fqClass of sortedClasses) {
         const methods = byClass.get(fqClass)!;
@@ -164,13 +181,35 @@ function populateModuleItem(
             simpleName(fqClass),
             vscode.Uri.file(first.file)
         );
-        classItem.description = first.packageName || undefined;
+        // Set range to the class declaration line so clicking the gutter button
+        // next to the class only triggers the class run, not a method-level run.
+        // Using classLine (not first.line) avoids the gutter range overlapping
+        // with the first method item's own range.
+        classItem.range = new vscode.Range(first.classLine, 0, first.classLine, 0);
         meta.set(classItem.id, {
             kind: 'class',
             module,
             className: fqClass,
         });
-        moduleItem.children.add(classItem);
+        classItems.set(fqClass, classItem);
+
+        // Nested classes (className contains `$`) are placed under their parent
+        // class item; top-level classes go under the module item.
+        const dollarIdx = fqClass.lastIndexOf('$');
+        if (dollarIdx !== -1) {
+            const parentFq = fqClass.slice(0, dollarIdx);
+            const parentItem = classItems.get(parentFq);
+            if (parentItem) {
+                parentItem.children.add(classItem);
+            } else {
+                // Parent has no tests of its own (no class item created yet).
+                classItem.description = first.packageName || undefined;
+                moduleItem.children.add(classItem);
+            }
+        } else {
+            classItem.description = first.packageName || undefined;
+            moduleItem.children.add(classItem);
+        }
 
         for (const m of methods.sort((a, b) => a.methodName.localeCompare(b.methodName))) {
             const id = makeMethodId(module, fqClass, m.methodName);
@@ -191,17 +230,25 @@ function populateModuleItem(
     }
 }
 
-function makeClassId(module: GradleModule, fqClass: string): string {
+export function makeClassId(module: GradleModule, fqClass: string): string {
     return `cls:${module.workspaceFolder.uri.toString()}::${module.projectPath}::${fqClass}`;
 }
 
-function makeMethodId(module: GradleModule, fqClass: string, method: string): string {
+export function makeMethodId(module: GradleModule, fqClass: string, method: string): string {
     return `mth:${module.workspaceFolder.uri.toString()}::${module.projectPath}::${fqClass}::${method}`;
 }
 
-function simpleName(fq: string): string {
+/**
+ * Return the display name for a class: the innermost simple name.
+ * For nested classes like `sample.OuterTest$InnerTest` this returns `InnerTest`
+ * rather than the full `OuterTest$InnerTest` string.
+ */
+export function simpleName(fq: string): string {
     const dot = fq.lastIndexOf('.');
-    return dot === -1 ? fq : fq.slice(dot + 1);
+    const short = dot === -1 ? fq : fq.slice(dot + 1);
+    // For nested classes separated by `$`, show only the innermost segment.
+    const dollar = short.lastIndexOf('$');
+    return dollar === -1 ? short : short.slice(dollar + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -352,11 +399,14 @@ function groupByModule(items: vscode.TestItem[]): Map<string, ModuleGroup> {
     return groups;
 }
 
-function buildGradleFilters(items: vscode.TestItem[]): string[] {
+export function buildGradleFilters(
+    items: vscode.TestItem[],
+    metaIn: ReadonlyMap<string, ItemMeta> = meta
+): string[] {
     // Group methods by class to keep the filter list compact.
     const byClass = new Map<string, Set<string>>();
     for (const item of items) {
-        const m = meta.get(item.id);
+        const m = metaIn.get(item.id);
         if (!m || m.kind !== 'method' || !m.className || !m.methodName) {
             continue;
         }
@@ -375,10 +425,11 @@ function buildGradleFilters(items: vscode.TestItem[]): string[] {
     return out;
 }
 
-function applyResults(
+export function applyResults(
     run: vscode.TestRun,
     items: vscode.TestItem[],
-    cases: JUnitTestCase[]
+    cases: JUnitTestCase[],
+    metaIn: ReadonlyMap<string, ItemMeta> = meta
 ): void {
     // Index test cases by `class.method` (with nested `$` flattened to `.`).
     const caseIndex = new Map<string, JUnitTestCase>();
@@ -388,7 +439,7 @@ function applyResults(
     }
 
     for (const item of items) {
-        const m = meta.get(item.id);
+        const m = metaIn.get(item.id);
         if (!m || m.kind !== 'method' || !m.className || !m.methodName) {
             continue;
         }
@@ -396,6 +447,9 @@ function applyResults(
         const key = `${cls}.${m.methodName}`;
         const tc = caseIndex.get(key);
         if (!tc) {
+            // Test ran but produced no XML result — this can happen when a test is
+            // disabled via @Disabled or when a compile error prevents the run.
+            // Mark as skipped rather than errored to avoid false-alarm noise.
             run.skipped(item);
             continue;
         }

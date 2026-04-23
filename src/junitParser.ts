@@ -55,7 +55,7 @@ export function parseJUnitXml(xml: string): JUnitTestCase[] {
         if (failureMatch) {
             const fAttrs = parseAttrs(failureMatch[1]);
             tc.failure = {
-                message: decodeXml(fAttrs['message'] ?? ''),
+                message: fAttrs['message'] ?? '',
                 type: fAttrs['type'],
                 details: decodeXml((failureMatch[3] ?? '').trim()),
             };
@@ -63,7 +63,10 @@ export function parseJUnitXml(xml: string): JUnitTestCase[] {
         const skippedMatch = body.match(/<skipped\b([^>]*?)(\/>|>([\s\S]*?)<\/skipped>)/);
         if (skippedMatch) {
             const sAttrs = parseAttrs(skippedMatch[1]);
-            tc.skipped = { message: decodeXml(sAttrs['message'] ?? '') };
+            // JUnit XML may put the reason in either the `message` attribute or
+            // the element body text — use whichever is non-empty.
+            const bodyText = (skippedMatch[3] ?? '').trim();
+            tc.skipped = { message: sAttrs['message'] || bodyText };
         }
         cases.push(tc);
     }
@@ -72,10 +75,12 @@ export function parseJUnitXml(xml: string): JUnitTestCase[] {
 
 function parseAttrs(s: string): Record<string, string> {
     const out: Record<string, string> = {};
-    const re = /(\w[\w.-]*)\s*=\s*"([^"]*)"/g;
+    // Accept both double-quoted and single-quoted attribute values (both are
+    // valid XML, though Gradle typically uses double quotes).
+    const re = /(\w[\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(s)) !== null) {
-        out[m[1]] = decodeXml(m[2]);
+        out[m[1]] = decodeXml(m[2] ?? m[3] ?? '');
     }
     return out;
 }

@@ -82,13 +82,15 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "tsc --noEmit",
+    "test": "vitest run",
     "icon": "node scripts/generate_icon.js"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.80.0",
     "sharp": "^0.34.5",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.5"
   },
   "repository": {
     "type": "git",

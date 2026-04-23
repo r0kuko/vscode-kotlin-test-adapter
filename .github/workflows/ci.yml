@@ -32,6 +32,9 @@ jobs:
       - name: Compile
         run: bun run compile
 
+      - name: Unit tests
+        run: bun run test
+
       - name: Package VSIX (smoke test)
         run: bunx --bun @vscode/vsce@latest package --out "vscode-kotlin-test-adapter-${{ github.sha }}.vsix"
 

@@ -34,6 +34,9 @@ jobs:
       - name: Compile
         run: bun run compile
 
+      - name: Unit tests
+        run: bun run test
+
       - name: Verify tag matches package.json version
         if: github.event_name == 'push'
         run: |

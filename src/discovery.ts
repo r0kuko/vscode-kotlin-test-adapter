@@ -16,6 +16,8 @@ export interface DiscoveredTest {
     methodName: string;
     /** 0-based line number of the test method declaration. */
     line: number;
+    /** 0-based line number of the enclosing class/object declaration. */
+    classLine: number;
     /** Whether the enclosing class is annotated with @Nested (kept for future use). */
     nested: boolean;
 }
@@ -80,6 +82,8 @@ export function parseKotlinTests(
 
     const lines = text.split(/\r?\n/);
     let pkg = '';
+    let inBlockComment = false;
+    let inRawString = false;
 
     type ClassFrame = {
         name: string;
@@ -95,11 +99,19 @@ export function parseKotlinTests(
     const tests: DiscoveredTest[] = [];
 
     const annotationLine = /^\s*@([A-Za-z_][\w.]*)/;
+    const allAnnotationsOnLine = /@([A-Za-z_][\w.]*)/g;
     const packageLine = /^\s*package\s+([\w.]+)/;
     const classLine =
         /^\s*(?:(?:public|internal|private|protected|open|abstract|sealed|final|inner|data|enum|annotation|companion)\s+)*(?:class|object)\s+([A-Za-z_][\w]*)/;
+    // companion object without a name — push a synthetic frame so its body
+    // is isolated from the enclosing class.
+    const companionObjectLine =
+        /^\s*(?:(?:public|internal|private|protected)\s+)?companion\s+object\s*[^A-Za-z_]/;
+    // (?:<[^(]+>\s+)? handles generic type params including nested bounds like
+    // <T : Comparable<T>>. Using [^(]+ instead of [^>]+ avoids stopping at the
+    // first > in a nested generic.
     const funLine =
-        /^\s*(?:(?:public|internal|private|protected|open|override|suspend|inline|operator|infix|tailrec|external|final)\s+)*fun\s+(?:<[^>]+>\s+)?([A-Za-z_][\w]*|`[^`]+`)\s*\(/;
+        /(?:^|(?<=\s))fun\s+(?:<[^(]+>\s+)?([A-Za-z_][\w]*|`[^`]+`)\s*\(/;
 
     const testAnnotationNames = new Set([
         'Test',
@@ -119,20 +131,78 @@ export function parseKotlinTests(
 
     for (let i = 0; i < lines.length; i++) {
         const raw = lines[i];
-        const line = stripLineComment(raw);
+
+        // ── Block comment tracking ────────────────────────────────────────────
+        // Strip any block-comment regions before further processing.
+        let line = stripLineComment(raw);
+
+        // ── Raw string (triple-quoted) tracking ──────────────────────────────────
+        // Count """ occurrences on the processed line to track multi-line raw
+        // strings.  Lines inside """...""" must not be parsed as code.
+        const rawQuoteCount = (line.match(/"""/g) ?? []).length;
+        const wasInRawString = inRawString;
+        if (rawQuoteCount % 2 !== 0) {
+            inRawString = !inRawString;
+        }
+        if (wasInRawString || (inRawString && rawQuoteCount > 0)) {
+            // Either fully inside a raw string, or on the opening/closing delimiter
+            // line.  Skip all further processing (including brace counting).
+            continue;
+        }
+        if (inBlockComment) {
+            const endIdx = line.indexOf('*/');
+            if (endIdx === -1) {
+                // Entire line is inside a block comment.
+                continue;
+            }
+            // Rest of the line after the block comment end.
+            line = line.slice(endIdx + 2);
+            inBlockComment = false;
+        }
+        // Check for a block comment starting on this line.
+        const blockStart = line.indexOf('/*');
+        if (blockStart !== -1) {
+            const blockEnd = line.indexOf('*/', blockStart + 2);
+            if (blockEnd === -1) {
+                // Block comment opens but doesn't close on this line.
+                line = line.slice(0, blockStart);
+                inBlockComment = true;
+            } else {
+                // Block comment opens and closes on same line — remove it.
+                line = line.slice(0, blockStart) + line.slice(blockEnd + 2);
+            }
+        }
 
         const pkgMatch = line.match(packageLine);
         if (pkgMatch && !pkg) {
             pkg = pkgMatch[1];
         }
 
+        // Collect ALL annotations on this line (e.g. `@Suppress @Test fun foo()`).
         const annMatch = line.match(annotationLine);
         if (annMatch) {
-            pendingAnnotations.push(annMatch[1]);
-            // Annotations may be the only thing on the line; continue scanning the same line for declarations.
+            let am: RegExpExecArray | null;
+            allAnnotationsOnLine.lastIndex = 0;
+            while ((am = allAnnotationsOnLine.exec(line)) !== null) {
+                pendingAnnotations.push(am[1]);
+            }
         }
 
-        const classMatch = line.match(classLine);
+        // companion object without a name — push a synthetic frame so its body
+        // is NOT attributed to the enclosing class.
+        const companionMatch = line.match(companionObjectLine);
+        if (companionMatch) {
+            classStack.push({
+                name: '$Companion',
+                line: i,
+                braceDepth,
+                nested: classStack.length > 0,
+                hasNestedAnnotation: false,
+            });
+            pendingAnnotations = [];
+        }
+
+        const classMatch = !companionMatch && line.match(classLine);
         if (classMatch) {
             const isNested = pendingAnnotations.some(a => nestedAnnotationNames.has(a));
             classStack.push({
@@ -142,11 +212,16 @@ export function parseKotlinTests(
                 nested: classStack.length > 0,
                 hasNestedAnnotation: isNested,
             });
+            // Annotations have been consumed by this class declaration.
+            pendingAnnotations = [];
         }
 
         const funMatch = line.match(funLine);
         if (funMatch && classStack.length > 0) {
-            const isTest = pendingAnnotations.some(a => testAnnotationNames.has(a));
+            // Skip methods inside companion objects — they are not test methods.
+            const topFrame = classStack[classStack.length - 1];
+            const insideCompanion = topFrame.name === '$Companion';
+            const isTest = !insideCompanion && pendingAnnotations.some(a => testAnnotationNames.has(a));
             if (isTest) {
                 const cls = classStack[classStack.length - 1];
                 const fqClass = buildClassName(pkg, classStack);
@@ -158,9 +233,12 @@ export function parseKotlinTests(
                     packageName: pkg,
                     methodName: funMatch[1].replace(/^`|`$/g, ''),
                     line: i,
+                    classLine: cls.line,
                     nested: cls.hasNestedAnnotation,
                 });
             }
+            // Annotations have been consumed by this function declaration.
+            pendingAnnotations = [];
         }
 
         // Track braces AFTER inspecting the line so the class's own opening brace
@@ -176,8 +254,23 @@ export function parseKotlinTests(
             classStack.pop();
         }
 
-        if (line.trim() && !annMatch) {
-            // Reset pending annotations once we hit a non-annotation, non-empty line.
+        // Reset pending annotations only when we encounter a line that is not
+        // - an annotation line, AND
+        // - not a pure modifier keyword line (override, internal, open, etc.)
+        // A pure modifier line can legally appear between @Test and fun.
+        const MODIFIER_WORDS = new Set([
+            'public', 'internal', 'private', 'protected', 'open', 'abstract',
+            'sealed', 'final', 'inner', 'data', 'enum', 'annotation', 'override',
+            'external', 'expect', 'actual', 'tailrec', 'inline', 'noinline',
+            'crossinline', 'suspend', 'operator', 'infix', 'lateinit',
+        ]);
+        const trimmed = line.trim();
+        const isModifierOnly =
+            !annMatch &&
+            trimmed.length > 0 &&
+            trimmed.split(/\s+/).every(w => MODIFIER_WORDS.has(w));
+        if (trimmed && !annMatch && !isModifierOnly) {
+            // Reset pending annotations once we hit a non-annotation, non-modifier, non-empty line.
             pendingAnnotations = [];
         }
     }

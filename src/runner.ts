@@ -88,6 +88,8 @@ function spawnPromise(
     token: vscode.CancellationToken,
     onOutput: (chunk: string) => void
 ): Promise<SpawnResult> {
+    // Cap in-memory buffering to avoid OOM on very verbose Gradle output.
+    const MAX_BUFFER = 10 * 1024 * 1024; // 10 MB per stream
     return new Promise<SpawnResult>(resolve => {
         const child = cp.spawn(command, args, {
             cwd,
@@ -105,12 +107,16 @@ function spawnPromise(
         });
         child.stdout.on('data', (b: Buffer) => {
             const s = b.toString();
-            stdout += s;
+            if (stdout.length < MAX_BUFFER) {
+                stdout += s;
+            }
             onOutput(s);
         });
         child.stderr.on('data', (b: Buffer) => {
             const s = b.toString();
-            stderr += s;
+            if (stderr.length < MAX_BUFFER) {
+                stderr += s;
+            }
             onOutput(s);
         });
         child.on('error', err => {
