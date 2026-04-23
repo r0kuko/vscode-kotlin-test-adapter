@@ -59,9 +59,18 @@ async function main() {
         .png()
         .toBuffer();
 
-    // Render the Kotlin SVG onto a transparent square at overlaySize.
-    const overlay = await sharp(overlayPath, { density: 384 })
-        .resize(overlaySize, overlaySize, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    // Render the Kotlin SVG. The official favicon contains transparent padding
+    // around the diamond, so trim() it first — otherwise the visible logo would
+    // not actually sit flush in the bottom-right corner.
+    const trimmedOverlay = await sharp(overlayPath, { density: 384 })
+        .trim()
+        .png()
+        .toBuffer();
+    const overlay = await sharp(trimmedOverlay)
+        .resize(overlaySize, overlaySize, {
+            fit: 'contain',
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+        })
         .png()
         .toBuffer();
 
