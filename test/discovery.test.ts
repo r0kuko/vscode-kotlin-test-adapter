@@ -342,5 +342,79 @@ open class BaseTest {
         expect(tests).toHaveLength(1);
         expect(tests[0].methodName).toBe('overridableTest');
     });
+
+    // -------------------------------------------------------------------------
+    // @Order annotation support
+    // -------------------------------------------------------------------------
+
+    it('[Order] captures @Order(n) on test methods', () => {
+        const src = `
+package sample
+class MyTest {
+    @Test @Order(2) fun second() {}
+    @Test @Order(1) fun first() {}
+    @Test fun unordered() {}
+}
+`.trim();``
+        const tests = parse(src);
+        const byName = new Map(tests.map(t => [t.methodName, t]));
+        expect(byName.get('first')!.order).toBe(1);
+        expect(byName.get('second')!.order).toBe(2);
+        expect(byName.get('unordered')!.order).toBeUndefined();
+    });
+
+    it('[Order] captures @Order on stacked annotation lines', () => {
+        const src = `
+package sample
+class MyTest {
+    @Test
+    @Order(5)
+    fun staggered() {}
+}
+`.trim();
+        const tests = parse(src);
+        expect(tests).toHaveLength(1);
+        expect(tests[0].order).toBe(5);
+    });
+
+    it('[Order] captures @Order(value = 7) named-argument form', () => {
+        const src = `
+package sample
+class MyTest {
+    @Test @Order(value = 7) fun named() {}
+}
+`.trim();
+        const tests = parse(src);
+        expect(tests[0].order).toBe(7);
+    });
+
+    it('[Order] captures @Order on the enclosing class as classOrder', () => {
+        const src = `
+package sample
+@Order(10)
+class OrderedClass {
+    @Test fun a() {}
+}
+`.trim();
+        const tests = parse(src);
+        expect(tests).toHaveLength(1);
+        expect(tests[0].classOrder).toBe(10);
+        // @Order on the class must NOT leak into the method's own order.
+        expect(tests[0].order).toBeUndefined();
+    });
+
+    it('[Order] @Order on previous method does not leak to the next one', () => {
+        const src = `
+package sample
+class MyTest {
+    @Test @Order(1) fun first() {}
+    @Test fun second() {}
+}
+`.trim();
+        const tests = parse(src);
+        const byName = new Map(tests.map(t => [t.methodName, t]));
+        expect(byName.get('first')!.order).toBe(1);
+        expect(byName.get('second')!.order).toBeUndefined();
+    });
 });
 

@@ -20,6 +20,10 @@ export interface DiscoveredTest {
     classLine: number;
     /** Whether the enclosing class is annotated with @Nested (kept for future use). */
     nested: boolean;
+    /** Optional order from `@Order(n)` on the test method. Lower runs/displays first. */
+    order?: number;
+    /** Optional order from `@Order(n)` on the enclosing class. */
+    classOrder?: number;
 }
 
 /** Find all Kotlin test files for a module honoring user globs. */
@@ -91,10 +95,12 @@ export function parseKotlinTests(
         braceDepth: number; // brace depth at which this class lives
         nested: boolean;
         hasNestedAnnotation: boolean;
+        order?: number;
     };
     const classStack: ClassFrame[] = [];
     let braceDepth = 0;
     let pendingAnnotations: string[] = [];
+    let pendingOrder: number | undefined;
 
     const tests: DiscoveredTest[] = [];
 
@@ -128,6 +134,8 @@ export function parseKotlinTests(
         'Nested',
         'org.junit.jupiter.api.Nested',
     ]);
+    // `@Order(5)` — JUnit 5's org.junit.jupiter.api.Order. Captures the integer.
+    const orderAnnotationRegex = /@Order\s*\(\s*(?:value\s*=\s*)?(-?\d+)\s*\)/;
 
     for (let i = 0; i < lines.length; i++) {
         const raw = lines[i];
@@ -186,6 +194,10 @@ export function parseKotlinTests(
             while ((am = allAnnotationsOnLine.exec(line)) !== null) {
                 pendingAnnotations.push(am[1]);
             }
+            const orderMatch = line.match(orderAnnotationRegex);
+            if (orderMatch) {
+                pendingOrder = parseInt(orderMatch[1], 10);
+            }
         }
 
         // companion object without a name — push a synthetic frame so its body
@@ -200,6 +212,7 @@ export function parseKotlinTests(
                 hasNestedAnnotation: false,
             });
             pendingAnnotations = [];
+            pendingOrder = undefined;
         }
 
         const classMatch = !companionMatch && line.match(classLine);
@@ -211,9 +224,11 @@ export function parseKotlinTests(
                 braceDepth,
                 nested: classStack.length > 0,
                 hasNestedAnnotation: isNested,
+                order: pendingOrder,
             });
             // Annotations have been consumed by this class declaration.
             pendingAnnotations = [];
+            pendingOrder = undefined;
         }
 
         const funMatch = line.match(funLine);
@@ -235,10 +250,13 @@ export function parseKotlinTests(
                     line: i,
                     classLine: cls.line,
                     nested: cls.hasNestedAnnotation,
+                    order: pendingOrder,
+                    classOrder: cls.order,
                 });
             }
             // Annotations have been consumed by this function declaration.
             pendingAnnotations = [];
+            pendingOrder = undefined;
         }
 
         // Track braces AFTER inspecting the line so the class's own opening brace
@@ -272,6 +290,7 @@ export function parseKotlinTests(
         if (trimmed && !annMatch && !isModifierOnly) {
             // Reset pending annotations once we hit a non-annotation, non-modifier, non-empty line.
             pendingAnnotations = [];
+            pendingOrder = undefined;
         }
     }
 

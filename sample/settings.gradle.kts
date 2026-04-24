@@ -1,3 +1,8 @@
 rootProject.name = "kotlin-test-sample"
 
-include(":core", ":app")
+include(
+    ":core",
+    ":app",
+    ":modules:featureA",
+    ":modules:featureB",
+)

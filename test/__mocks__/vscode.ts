@@ -88,6 +88,7 @@ export class TestItem {
     children: TestItemCollection;
     range: InstanceType<typeof Range> | undefined;
     description: string | undefined;
+    sortText: string | undefined;
 
     constructor(
         public readonly id: string,

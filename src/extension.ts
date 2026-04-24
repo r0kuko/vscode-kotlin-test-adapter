@@ -21,7 +21,7 @@ let output: vscode.OutputChannel;
  * We avoid putting non-serialisable data on the TestItem itself.
  */
 export interface ItemMeta {
-    kind: 'workspace' | 'module' | 'class' | 'method';
+    kind: 'workspace' | 'group' | 'module' | 'class' | 'method';
     module?: GradleModule;
     /** For classes/methods: the fully-qualified class name. */
     className?: string;
@@ -69,12 +69,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         )
     );
 
-    // Re-discover when Kotlin test files are saved.
-    const watcher = vscode.workspace.createFileSystemWatcher('**/*.kt');
-    context.subscriptions.push(watcher);
-    watcher.onDidCreate(uri => onFileChanged(uri));
-    watcher.onDidChange(uri => onFileChanged(uri));
-    watcher.onDidDelete(uri => onFileDeleted(uri));
+    // Re-discover when Kotlin test files are saved. We narrow the watcher to the
+    // configured testSourceGlobs (per workspace folder) and skip noisy build
+    // output directories. Without this, generated files under build/ caused the
+    // tree to be torn down and rebuilt on every Gradle invocation.
+    setupFileWatchers(context);
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => refreshAll())
@@ -93,11 +92,38 @@ export function deactivate(): void {
     }
 }
 
+function setupFileWatchers(context: vscode.ExtensionContext): void {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    for (const folder of folders) {
+        const config = vscode.workspace.getConfiguration('kotlinTestAdapter', folder.uri);
+        const globs = config.get<string[]>('testSourceGlobs') ?? ['**/src/test/kotlin/**/*.kt'];
+        for (const g of globs) {
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(folder, g)
+            );
+            context.subscriptions.push(watcher);
+            watcher.onDidCreate(uri => onFileChanged(uri));
+            watcher.onDidChange(uri => onFileChanged(uri));
+            watcher.onDidDelete(uri => onFileDeleted(uri));
+        }
+    }
+}
+
+/** Returns true if the path lives inside a Gradle build/ output directory or similar. */
+function isBuildArtifact(fsPath: string): boolean {
+    const norm = fsPath.replace(/\\/g, '/');
+    return /\/(?:build|\.gradle|out|node_modules|\.idea|\.git)\//.test(norm);
+}
+
 // ---------------------------------------------------------------------------
 // Discovery / tree management
 // ---------------------------------------------------------------------------
 
 let refreshing = false;
+/** Cache: workspaceFolder URI string → discovered modules (for incremental updates). */
+const moduleCache = new Map<string, GradleModule[]>();
+/** Cache: TestItem.id → GradleModule (used to find which item to update on file change). */
+const moduleItemIndex = new Map<string, vscode.TestItem>();
 
 async function refreshAll(): Promise<void> {
     if (refreshing) {
@@ -109,35 +135,155 @@ async function refreshAll(): Promise<void> {
         // Replace top-level items.
         controller.items.replace([]);
         meta.clear();
+        moduleCache.clear();
+        moduleItemIndex.clear();
 
         for (const folder of folders) {
             const modules = await discoverGradleModules(folder);
             if (modules.length === 0) {
                 continue;
             }
-            const folderItem = controller.createTestItem(
-                `ws:${folder.uri.toString()}`,
-                folder.name,
-                folder.uri
-            );
-            meta.set(folderItem.id, { kind: 'workspace' });
-            controller.items.add(folderItem);
-
-            for (const module of modules) {
-                const moduleItem = controller.createTestItem(
-                    `mod:${folder.uri.toString()}::${module.projectPath}`,
-                    module.projectPath === ':' ? '(root)' : module.projectPath,
-                    vscode.Uri.file(module.rootPath)
-                );
-                moduleItem.description = path.relative(folder.uri.fsPath, module.rootPath) || '.';
-                meta.set(moduleItem.id, { kind: 'module', module });
-                folderItem.children.add(moduleItem);
-
-                await discoverModuleTests(moduleItem, module);
-            }
+            moduleCache.set(folder.uri.toString(), modules);
+            await buildModuleTree(folder, modules);
         }
     } finally {
         refreshing = false;
+    }
+}
+
+/**
+ * Pure helper: compute the desired tree shape for a list of Gradle modules.
+ * Returned nodes are sorted by `projectPath`. Used by `buildModuleTree` and
+ * exposed for unit tests.
+ */
+export interface ModuleTreeNode {
+    projectPath: string;
+    /** Last segment of `projectPath` (e.g. `featureA` for `:modules:featureA`). */
+    name: string;
+    /** Whether this node is a real Gradle module (has a build file) vs. a virtual group. */
+    isModule: boolean;
+    /** The owning module, when `isModule` is true. */
+    module?: GradleModule;
+    children: ModuleTreeNode[];
+}
+
+export function buildModuleTreeShape(modules: GradleModule[]): ModuleTreeNode {
+    const root = modules.find(m => m.projectPath === ':');
+    const rootNode: ModuleTreeNode = {
+        projectPath: ':',
+        name: root ? root.name : '',
+        isModule: !!root,
+        module: root,
+        children: [],
+    };
+    const byPath = new Map<string, ModuleTreeNode>();
+    byPath.set(':', rootNode);
+
+    function ensure(projectPath: string): ModuleTreeNode {
+        const existing = byPath.get(projectPath);
+        if (existing) {
+            return existing;
+        }
+        const lastColon = projectPath.lastIndexOf(':');
+        const parentPath = lastColon === 0 ? ':' : projectPath.slice(0, lastColon);
+        const segName = projectPath.slice(lastColon + 1);
+        const parent = ensure(parentPath);
+        const matching = modules.find(m => m.projectPath === projectPath);
+        const node: ModuleTreeNode = {
+            projectPath,
+            name: segName,
+            isModule: !!matching,
+            module: matching,
+            children: [],
+        };
+        parent.children.push(node);
+        byPath.set(projectPath, node);
+        return node;
+    }
+
+    const subs = modules
+        .filter(m => m.projectPath !== ':')
+        .sort((a, b) => a.projectPath.length - b.projectPath.length);
+    for (const m of subs) {
+        ensure(m.projectPath);
+    }
+    // Sort siblings alphabetically.
+    const sortRec = (n: ModuleTreeNode) => {
+        n.children.sort((a, b) => a.name.localeCompare(b.name));
+        n.children.forEach(sortRec);
+    };
+    sortRec(rootNode);
+    return rootNode;
+}
+
+/**
+ * Build a hierarchical TestItem tree for one workspace folder.
+ *
+ * Rules:
+ *  - The workspace folder TestItem represents the Gradle root project (`:`).
+ *    If the root has a build file, its tests are placed directly under it.
+ *  - Subprojects are nested by their `:a:b:c` path segments. Intermediate
+ *    segments that are not themselves Gradle modules become "group" items.
+ */
+async function buildModuleTree(
+    folder: vscode.WorkspaceFolder,
+    modules: GradleModule[]
+): Promise<void> {
+    const wsKey = folder.uri.toString();
+    const shape = buildModuleTreeShape(modules);
+
+    const wsItem = controller.createTestItem(
+        `ws:${wsKey}`,
+        folder.name,
+        folder.uri
+    );
+    controller.items.add(wsItem);
+    if (shape.isModule && shape.module) {
+        meta.set(wsItem.id, { kind: 'module', module: shape.module });
+        moduleItemIndex.set(wsItem.id, wsItem);
+    } else {
+        meta.set(wsItem.id, { kind: 'workspace' });
+    }
+
+    // Index of projectPath → TestItem so the test-discovery pass below can
+    // find the right item for each module.
+    const itemsByPath = new Map<string, vscode.TestItem>();
+    itemsByPath.set(':', wsItem);
+
+    const addNode = (node: ModuleTreeNode, parent: vscode.TestItem) => {
+        let item: vscode.TestItem;
+        if (node.isModule && node.module) {
+            item = controller.createTestItem(
+                `mod:${wsKey}::${node.projectPath}`,
+                node.name,
+                vscode.Uri.file(node.module.rootPath)
+            );
+            meta.set(item.id, { kind: 'module', module: node.module });
+            moduleItemIndex.set(item.id, item);
+        } else {
+            item = controller.createTestItem(
+                `grp:${wsKey}::${node.projectPath}`,
+                node.name
+            );
+            meta.set(item.id, { kind: 'group' });
+        }
+        parent.children.add(item);
+        itemsByPath.set(node.projectPath, item);
+        for (const child of node.children) {
+            addNode(child, item);
+        }
+    };
+
+    for (const child of shape.children) {
+        addNode(child, wsItem);
+    }
+
+    // Discover tests for every actual module (including root, if any).
+    for (const m of modules) {
+        const item = m.projectPath === ':' ? wsItem : itemsByPath.get(m.projectPath);
+        if (item) {
+            await discoverModuleTests(item, m);
+        }
     }
 }
 
@@ -158,7 +304,20 @@ function populateModuleItem(
     module: GradleModule,
     tests: DiscoveredTest[]
 ): void {
-    moduleItem.children.replace([]);
+    // Preserve any existing non-class children (e.g. nested module/group items)
+    // so that we only swap out the test classes, not the whole module subtree.
+    const preserved: vscode.TestItem[] = [];
+    moduleItem.children.forEach(child => {
+        const m = meta.get(child.id);
+        if (m?.kind === 'module' || m?.kind === 'group') {
+            preserved.push(child);
+        } else if (m?.kind === 'class') {
+            meta.delete(child.id);
+            // Methods under it will be GC'd via .replace below.
+            child.children.forEach(grand => meta.delete(grand.id));
+        }
+    });
+    moduleItem.children.replace(preserved);
 
     // Group by class.
     const byClass = new Map<string, DiscoveredTest[]>();
@@ -172,7 +331,17 @@ function populateModuleItem(
     // of their parent class item rather than siblings under the module.
     const classItems = new Map<string, vscode.TestItem>();
 
-    const sortedClasses = Array.from(byClass.keys()).sort();
+    // Sort classes by @Order on the class declaration first (lower = earlier),
+    // then by fully-qualified name. Classes without an @Order go after ordered
+    // ones, preserving alphabetical stability.
+    const sortedClasses = Array.from(byClass.keys()).sort((a, b) => {
+        const aOrder = byClass.get(a)![0].classOrder ?? Number.POSITIVE_INFINITY;
+        const bOrder = byClass.get(b)![0].classOrder ?? Number.POSITIVE_INFINITY;
+        if (aOrder !== bOrder) {
+            return aOrder - bOrder;
+        }
+        return a.localeCompare(b);
+    });
     for (const fqClass of sortedClasses) {
         const methods = byClass.get(fqClass)!;
         const first = methods[0];
@@ -187,6 +356,7 @@ function populateModuleItem(
         // Using classLine (not first.line) avoids the gutter range overlapping
         // with the first method item's own range.
         classItem.range = new vscode.Range(first.classLine, 0, first.classLine, 0);
+        classItem.sortText = sortKey(first.classOrder, simpleName(fqClass));
         meta.set(classItem.id, {
             kind: 'class',
             module,
@@ -212,7 +382,16 @@ function populateModuleItem(
             moduleItem.children.add(classItem);
         }
 
-        for (const m of methods.sort((a, b) => a.methodName.localeCompare(b.methodName))) {
+        // Sort methods by @Order first (ascending), then by name for stability.
+        const sortedMethods = methods.slice().sort((a, b) => {
+            const ao = a.order ?? Number.POSITIVE_INFINITY;
+            const bo = b.order ?? Number.POSITIVE_INFINITY;
+            if (ao !== bo) {
+                return ao - bo;
+            }
+            return a.methodName.localeCompare(b.methodName);
+        });
+        for (const m of sortedMethods) {
             const id = makeMethodId(module, fqClass, m.methodName);
             const item = controller.createTestItem(
                 id,
@@ -220,6 +399,7 @@ function populateModuleItem(
                 vscode.Uri.file(m.file)
             );
             item.range = new vscode.Range(m.line, 0, m.line, 0);
+            item.sortText = sortKey(m.order, m.methodName);
             meta.set(item.id, {
                 kind: 'method',
                 module,
@@ -229,6 +409,23 @@ function populateModuleItem(
             classItem.children.add(item);
         }
     }
+}
+
+/**
+ * Build a `sortText` value so the VS Code Test Explorer (which sorts items by
+ * label/sortText alphabetically) honors `@Order` annotations.
+ *
+ * Items with an explicit order are bucketed before unordered items. The order
+ * value is offset and zero-padded so that negative values and lexical compare
+ * still produce ascending numeric ordering.
+ */
+export function sortKey(order: number | undefined, name: string): string {
+    if (order === undefined || Number.isNaN(order)) {
+        return `1_${name}`;
+    }
+    const shifted = Math.trunc(order) + 1_000_000_000;
+    const padded = shifted.toString().padStart(11, '0');
+    return `0_${padded}_${name}`;
 }
 
 export function makeClassId(module: GradleModule, fqClass: string): string {
@@ -257,17 +454,91 @@ export function simpleName(fq: string): string {
 // ---------------------------------------------------------------------------
 
 let pending: NodeJS.Timeout | undefined;
-function onFileChanged(_uri: vscode.Uri): void {
+/** URIs queued for incremental refresh (debounced). */
+const pendingUris = new Set<string>();
+
+function onFileChanged(uri: vscode.Uri): void {
+    // Ignore changes inside Gradle build/output directories. The default
+    // `**/*.kt` watcher used to trigger a full reload every time Gradle
+    // touched a generated source file, which made the tree blink and reset
+    // the user's selection in larger projects.
+    if (isBuildArtifact(uri.fsPath)) {
+        return;
+    }
+    pendingUris.add(uri.toString());
     if (pending) {
         clearTimeout(pending);
     }
     pending = setTimeout(() => {
         pending = undefined;
-        refreshAll().catch(err => output.appendLine(`Refresh failed: ${err}`));
+        const uris = Array.from(pendingUris);
+        pendingUris.clear();
+        processFileChanges(uris).catch(err =>
+            output.appendLine(`Incremental refresh failed: ${err}`)
+        );
     }, 500);
 }
-function onFileDeleted(_uri: vscode.Uri): void {
-    onFileChanged(_uri);
+function onFileDeleted(uri: vscode.Uri): void {
+    onFileChanged(uri);
+}
+
+/**
+ * Re-discover only the modules whose source roots contain at least one
+ * changed file. Falls back to a full refresh if we can't map the file to a
+ * known module (e.g. a brand-new module added to settings.gradle).
+ */
+async function processFileChanges(uris: string[]): Promise<void> {
+    if (refreshing) {
+        return;
+    }
+    if (uris.length === 0) {
+        return;
+    }
+    const toRefresh = new Set<vscode.TestItem>();
+    let unknownFile = false;
+
+    for (const uriStr of uris) {
+        const fsPath = vscode.Uri.parse(uriStr).fsPath;
+        const hit = findOwningModule(fsPath);
+        if (!hit) {
+            unknownFile = true;
+            break;
+        }
+        toRefresh.add(hit.item);
+    }
+
+    if (unknownFile) {
+        await refreshAll();
+        return;
+    }
+
+    for (const item of toRefresh) {
+        const m = meta.get(item.id);
+        if (m?.kind === 'module' && m.module) {
+            await discoverModuleTests(item, m.module);
+        }
+    }
+}
+
+/** Locate which discovered module a given file path belongs to. */
+function findOwningModule(
+    fsPath: string
+): { module: GradleModule; item: vscode.TestItem } | undefined {
+    let best: { module: GradleModule; item: vscode.TestItem } | undefined;
+    for (const [, item] of moduleItemIndex) {
+        const m = meta.get(item.id);
+        if (m?.kind !== 'module' || !m.module) {
+            continue;
+        }
+        const root = m.module.rootPath;
+        if (fsPath === root || fsPath.startsWith(root + path.sep)) {
+            // Prefer the deepest (most specific) match in case of nested modules.
+            if (!best || m.module.rootPath.length > best.module.rootPath.length) {
+                best = { module: m.module, item };
+            }
+        }
+    }
+    return best;
 }
 
 // ---------------------------------------------------------------------------
