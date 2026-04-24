@@ -12,3 +12,7 @@
 其他可用于参考的项目有 https://github.com/kondratyev-nv/vscode-python-test-adapter 和其他相关项目。
 
 可能需要初始化一个 gradle kotlin 项目用于测试识别。
+
+Generate Tests
+Test Coverage / Kover
+kotlin debugger
