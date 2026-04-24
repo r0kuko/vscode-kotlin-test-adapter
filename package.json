@@ -2,7 +2,7 @@
   "name": "vscode-kotlin-test-adapter",
   "displayName": "Kotlin Test Explorer",
   "description": "Run and debug Kotlin (JUnit 5) tests in VS Code via Gradle. Compatible with the Test Explorer UI.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "r0kuko",
   "license": "MIT",
   "engines": {
