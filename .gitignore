@@ -7,3 +7,4 @@ sample/**/build/
 sample/**/.gradle/
 .gradle/
 build/
+.DS_Store
