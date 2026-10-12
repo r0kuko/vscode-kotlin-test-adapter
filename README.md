@@ -61,11 +61,15 @@ folder for the corresponding module:
 Reports are read from `build/test-results/<task>/*.xml` and applied back to
 each `TestItem`.
 
+The task defaults to `test`. Android projects can select a variant-specific
+task such as `testDebugUnitTest` with `kotlinTestAdapter.gradleTestTask`.
+
 ## Configuration
 
 | Setting | Default | Description |
 |---|---|---|
 | `kotlinTestAdapter.gradleCommand` | _(auto)_ | Override the Gradle command. Falls back to `./gradlew` (or `gradlew.bat`) if a wrapper exists, otherwise `gradle`. |
+| `kotlinTestAdapter.gradleTestTask` | `test` | Gradle task used to run tests and locate JUnit XML reports. Android projects can use a task such as `testDebugUnitTest`. |
 | `kotlinTestAdapter.gradleExtraArgs` | `[]` | Extra arguments appended to every Gradle invocation. |
 | `kotlinTestAdapter.testSourceGlobs` | _src/test/kotlin/**/*.kt, …_ | Globs (relative to each module) used to find test files. |
 | `kotlinTestAdapter.excludeGlobs` | `**/build/**, **/.gradle/**, **/node_modules/**` | Globs excluded from discovery. |

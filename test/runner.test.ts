@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Uri } from './__mocks__/vscode';
+import * as vscodeMock from './__mocks__/vscode';
 import { detectTestTasks, runTests } from '../src/runner';
 import type { GradleModule } from '../src/gradle';
 import type { RunRequest } from '../src/runner';
@@ -64,6 +65,21 @@ describe('detectTestTasks', () => {
         fs.mkdirSync(path.join(tmpDir, 'src', 'integrationTest'), { recursive: true });
         const module = makeModule(tmpDir);
         expect(detectTestTasks(module)).toEqual(['test', 'integrationTest']);
+    });
+
+    it('uses the configured Gradle test task', () => {
+        const originalGetConfiguration = vscodeMock.workspace.getConfiguration;
+        vscodeMock.workspace.getConfiguration = () => ({
+            get: (key: string, defaultValue?: unknown) =>
+                key === 'gradleTestTask' ? 'testDebugUnitTest' : defaultValue,
+        });
+
+        try {
+            const module = makeModule(tmpDir);
+            expect(detectTestTasks(module)).toEqual(['testDebugUnitTest']);
+        } finally {
+            vscodeMock.workspace.getConfiguration = originalGetConfiguration;
+        }
     });
 
     // ── BugR1 ────────────────────────────────────────────────────────────────

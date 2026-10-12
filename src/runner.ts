@@ -141,7 +141,11 @@ function spawnPromise(
 /** Best-effort detection of which Gradle test tasks exist for a module. */
 export function detectTestTasks(module: GradleModule): string[] {
     // Standard tasks. Heuristic: include "integrationTest" if the source set folder exists.
-    const tasks = ['test'];
+    const config = vscode.workspace.getConfiguration(
+        'kotlinTestAdapter',
+        module.workspaceFolder.uri
+    );
+    const tasks = [config.get<string>('gradleTestTask', 'test')];
     const integration = path.join(module.rootPath, 'src', 'integrationTest');
     if (fs.existsSync(integration)) {
         tasks.push('integrationTest');

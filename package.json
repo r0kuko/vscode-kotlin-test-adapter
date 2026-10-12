@@ -35,6 +35,18 @@
           "default": "",
           "description": "Override the Gradle command. Defaults to ./gradlew (or gradlew.bat on Windows) if a wrapper is found, otherwise 'gradle'."
         },
+        "kotlinTestAdapter.gradleTestTask": {
+          "type": "string",
+          "default": "test",
+          "examples": [
+            "test",
+            "testDebugUnitTest",
+            "testReleaseUnitTest"
+          ],
+          "minLength": 1,
+          "scope": "resource",
+          "description": "Gradle test task, for example 'testDebugUnitTest'."
+        },
         "kotlinTestAdapter.gradleExtraArgs": {
           "type": "array",
           "items": {
